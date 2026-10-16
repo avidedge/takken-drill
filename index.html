@@ -275,6 +275,7 @@ function start(mode,opt){
   state={reveal:mode==="exam"?"end":store.reveal,mode,label:modeLabel(mode,opt),items:pool.map(prepare),i:0,answers:[],deadline:mode==="exam"?Date.now()+EXAM_SECONDS*1000:null};
   clearInterval(timerId);
   if(state.deadline) timerId=setInterval(tick,1000);
+  try{history.pushState({screen:"quiz"},"")}catch(e){}
   renderQuestion();
 }
 function modeLabel(mode,opt){return {exam:"本試験モード",cat:opt,trap:"ひっかけ特訓",wrong:"間違えた問題",rand:`ランダム${opt}問`}[mode]}
@@ -282,7 +283,7 @@ function tick(){
   const el=document.getElementById("timer"); if(!el) return;
   const left=Math.max(0,Math.round((state.deadline-Date.now())/1000));
   el.textContent=`残り ${Math.floor(left/60)}:${String(left%60).padStart(2,"0")}`;
-  if(left===0){clearInterval(timerId);renderResult()}
+  if(left===0){clearInterval(timerId);showResult()}
 }
 
 function renderHome(msg){
@@ -319,7 +320,7 @@ function renderHome(msg){
 function renderQuestion(){
   const q=state.items[state.i], n=state.items.length;
   app.innerHTML=`<div class="stack">
-    <div class="top"><b>${esc(state.label)}</b><span>${state.i+1} / ${n} <span id="timer"></span></span></div>
+    <div class="top"><button class="btn ghost" id="back">← トップへ戻る</button><b>${esc(state.label)}</b><span>${state.i+1} / ${n} <span id="timer"></span></span></div>
     <div class="bar"><i style="width:${state.i/n*100}%"></i></div>
     <div class="panel stack">
       <div class="row"><span class="chip">${esc(q.cat)}</span><span class="chip ${q.tag==="ひっかけ"?"trap":""}">${esc(q.tag)}</span></div>
@@ -331,14 +332,15 @@ function renderQuestion(){
   </div>`;
   if(state.deadline) tick();
   app.querySelectorAll(".choice").forEach(b=>b.addEventListener("click",()=>pick(Number(b.dataset.k))));
-  document.getElementById("quit").addEventListener("click",renderResult);
+  document.getElementById("quit").addEventListener("click",showResult);
+  document.getElementById("back").addEventListener("click",goHome);
 }
 function pick(k){
   app.querySelectorAll(".choice").forEach((b,idx)=>b.classList.toggle("picked",idx===k));
   document.getElementById("after").innerHTML=`<div class="conf"><b>自信度は？</b>${CONFIDENCE.map(c=>`<button data-c="${c.key}">${c.label}</button>`).join("")}</div>`;
   document.querySelectorAll("[data-c]").forEach(b=>b.addEventListener("click",()=>answer(k,b.dataset.c)));
 }
-function goNext(){if(state.i===state.items.length-1) renderResult(); else {state.i++;renderQuestion()}}
+function goNext(){if(state.i===state.items.length-1) showResult(); else {state.i++;renderQuestion()}}
 function answer(k,conf){
   const q=state.items[state.i], ok=k===q.answer;
   state.answers.push({q,picked:k,ok,conf});
@@ -356,6 +358,9 @@ function answer(k,conf){
   const next=document.getElementById("next"); next.focus();
   next.addEventListener("click",goNext);
 }
+function showResult(){try{history.replaceState({screen:"result"},"")}catch(e){}renderResult()}
+function goHome(){if(history.state&&history.state.screen){history.back()}else renderHome()}
+window.addEventListener("popstate",()=>{window.scrollTo(0,0);renderHome()});
 function renderResult(){
   clearInterval(timerId);
   const a=state.answers, total=state.items.length, right=a.filter(x=>x.ok).length;
@@ -390,7 +395,7 @@ function renderResult(){
       </div>
       <div class="foot">本番で信用できるのは「確信して正解」だけです。この数が合格ライン（50問中37）を超えるまで繰り返しましょう。</div>
     </div>
-    <div class="row"><button class="btn" id="again">同じモードでもう一度</button><button class="btn ghost" id="home">トップへ</button></div>
+    <div class="row"><button class="btn" id="again">同じモードでもう一度</button><button class="btn ghost" id="home">← トップへ戻る</button></div>
     ${a.length?reviewHtml:""}
   </div>`;
   app.querySelectorAll("[data-f]").forEach(b=>b.addEventListener("click",()=>{
@@ -398,7 +403,7 @@ function renderResult(){
     document.querySelectorAll("#review > .miss").forEach((el,i)=>el.hidden=b.dataset.f==="ng"&&a[i].ok)}));
   const {mode,label}=state;
   document.getElementById("again").addEventListener("click",()=>start(mode,mode==="rand"?Number(label.match(/\d+/)[0]):label));
-  document.getElementById("home").addEventListener("click",()=>renderHome());
+  document.getElementById("home").addEventListener("click",goHome);
 }
 renderHome(ALL.length?"":"問題データを読み込めませんでした。");
 </script>
