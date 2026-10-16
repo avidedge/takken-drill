@@ -80,6 +80,7 @@ td:last-child,th:last-child{text-align:right}
 .cd{font-family:var(--display);font-weight:400;font-size:32px;color:var(--accent);font-variant-numeric:tabular-nums}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:13px}
 .mode .bar{margin-top:6px}
+.btn[disabled]{opacity:.4;cursor:default}
 .mode[disabled]{opacity:.45;cursor:default}
 .miss{font-size:14px;border-top:1px solid var(--line);padding-top:10px}
 .foot{font-size:12px;color:var(--muted)}
@@ -365,14 +366,15 @@ function renderQuestion(){
     <div class="panel stack">
       <div class="row"><span class="chip">${esc(q.cat)}</span><span class="chip ${q.tag==="ひっかけ"?"trap":""}">${esc(q.tag)}</span><button class="linkbtn" id="mark" aria-pressed="${!!store.marks[q.id]}">${store.marks[q.id]?"★ ブックマーク済み":"☆ ブックマーク"}</button></div>
       <div class="q">${esc(q.q)}</div>
-      <div class="choices">${q.choices.map((c,k)=>`<button class="choice" data-k="${k}"><span class="n">${k+1}</span><span>${esc(c)}</span></button>`).join("")}</div>
+      <div class="choices">${q.choices.map((c,k)=>`<button class="choice" data-k="${k}"><span class="n">${k+1}</span><span>${esc(c)}${state.prevPick===k?'<span class="chip" style="margin-left:8px">前回の解答</span>':""}</span></button>`).join("")}</div>
       <div id="after"></div>
     </div>
-    <div class="row"><button class="btn ghost" id="quit">中断して結果を見る</button></div>
+    <div class="row"><button class="btn ghost" id="prev" ${state.i===0?"disabled":""}>← 前の問題</button><button class="btn ghost" id="quit">中断して結果を見る</button></div>
   </div>`;
   if(state.deadline) tick();
   app.querySelectorAll(".choice").forEach(b=>b.addEventListener("click",()=>pick(Number(b.dataset.k))));
   document.getElementById("quit").addEventListener("click",showResult);
+  document.getElementById("prev").addEventListener("click",goPrev);
   document.getElementById("back").addEventListener("click",goHome);
   document.getElementById("mark").addEventListener("click",e=>{
     if(store.marks[q.id]) delete store.marks[q.id]; else store.marks[q.id]=1; saveStore(store);
@@ -384,10 +386,23 @@ function pick(k){
   document.getElementById("after").innerHTML=`<div class="conf"><b>自信度は？</b>${CONFIDENCE.map(c=>`<button data-c="${c.key}">${c.label}</button>`).join("")}</div>`;
   document.querySelectorAll("[data-c]").forEach(b=>b.addEventListener("click",()=>answer(k,b.dataset.c)));
 }
-function goNext(){if(state.i===state.items.length-1) showResult(); else {state.i++;renderQuestion()}}
+function undoAnswer(rec){
+  store.seen--; if(rec.ok) store.correct--;
+  const st=store.catStats[rec.q.cat]; if(st){st.seen--; if(rec.ok) st.correct--}
+  if(rec.wasWrong) store.wrong[rec.q.id]=1; else delete store.wrong[rec.q.id];
+}
+function goPrev(){
+  if(state.i===0) return;
+  const target=state.i-1, previous=state.answers[target];
+  while(state.answers.length>target) undoAnswer(state.answers.pop());
+  state.i=target; state.prevPick=previous?previous.picked:null;
+  store.resume={...state}; saveStore(store);
+  renderQuestion();
+}
+function goNext(){state.prevPick=null;if(state.i===state.items.length-1) showResult(); else {state.i++;renderQuestion()}}
 function answer(k,conf){
   const q=state.items[state.i], ok=k===q.answer;
-  state.answers.push({q,picked:k,ok,conf});
+  state.answers.push({q,picked:k,ok,conf,wasWrong:!!store.wrong[q.id]});
   store.seen++; if(ok){store.correct++;delete store.wrong[q.id]} else store.wrong[q.id]=1;
   const st=store.catStats[q.cat]||(store.catStats[q.cat]={seen:0,correct:0}); st.seen++; if(ok) st.correct++;
   store.resume={...state,i:state.i+1}; saveStore(store);
