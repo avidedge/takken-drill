@@ -76,6 +76,11 @@ td:last-child,th:last-child{text-align:right}
 .toggle{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:14px}
 .toggle button{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:4px 12px}
 .toggle button[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.countdown{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.cd{font-family:var(--display);font-weight:400;font-size:32px;color:var(--accent);font-variant-numeric:tabular-nums}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:13px}
+.mode .bar{margin-top:6px}
+.mode[disabled]{opacity:.45;cursor:default}
 .miss{font-size:14px;border-top:1px solid var(--line);padding-top:10px}
 .foot{font-size:12px;color:var(--muted)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -246,11 +251,15 @@ const EXAM_MIX={"宅建業法":20,"権利関係":14,"法令上の制限":8,"税�
 const PASS_RATIO=0.74; // 例年の合格点 36〜38/50 を基準
 const EXAM_SECONDS=120*60;
 const STORE_KEY="takken-drill-v1";
+const EXAM_DATE=new Date("2026-10-18T13:00:00+09:00");
+const WEAK_SET_SIZE=20;
+const DAY_MS=86400000;
 const ALL=(window.TAKKEN_QUESTIONS||[]);
 const app=document.getElementById("app");
 let state=null, timerId=null;
 
-function loadStore(){try{return JSON.parse(localStorage.getItem(STORE_KEY))||{wrong:{},seen:0,correct:0}}catch(e){return{wrong:{},seen:0,correct:0,reveal:"end"}}}
+function emptyStore(){return{wrong:{},seen:0,correct:0,reveal:"end",catStats:{},marks:{},resume:null}}
+function loadStore(){try{return {...emptyStore(),...JSON.parse(localStorage.getItem(STORE_KEY))}}catch(e){return emptyStore()}}
 function saveStore(s){try{localStorage.setItem(STORE_KEY,JSON.stringify(s))}catch(e){}}
 let store=loadStore(); if(!store.reveal) store.reveal="end";
 
@@ -264,21 +273,38 @@ function prepare(q){
 function buildExamSet(){
   return shuffle(CATEGORIES.flatMap(c=>shuffle(ALL.filter(q=>q.cat===c)).slice(0,EXAM_MIX[c])));
 }
+function catRate(c){const st=store.catStats[c];return st&&st.seen?st.correct/st.seen:null}
+function buildWeakSet(){
+  const wrongs=shuffle(ALL.filter(q=>store.wrong[q.id]));
+  const ranked=CATEGORIES.slice().sort((x,y)=>(catRate(x)??0.5)-(catRate(y)??0.5));
+  const fill=shuffle(ALL.filter(q=>!store.wrong[q.id]&&(q.cat===ranked[0]||q.cat===ranked[1])));
+  return shuffle(wrongs.concat(fill).slice(0,WEAK_SET_SIZE));
+}
+function saveResume(){store.resume=state;saveStore(store)}
+function resume(){
+  state=store.resume; clearInterval(timerId);
+  if(state.deadline) timerId=setInterval(tick,1000);
+  try{history.pushState({screen:"quiz"},"")}catch(e){}
+  renderQuestion();
+}
 function start(mode,opt){
   let pool;
   if(mode==="exam") pool=buildExamSet();
   else if(mode==="cat") pool=shuffle(ALL.filter(q=>q.cat===opt));
   else if(mode==="trap") pool=shuffle(ALL.filter(q=>q.tag==="ひっかけ"));
   else if(mode==="wrong") pool=shuffle(ALL.filter(q=>store.wrong[q.id]));
+  else if(mode==="mark") pool=shuffle(ALL.filter(q=>store.marks[q.id]));
+  else if(mode==="weak") pool=buildWeakSet();
   else pool=shuffle(ALL).slice(0,opt);
   if(!pool.length){renderHome("該当する問題がありません。");return}
   state={reveal:mode==="exam"?"end":store.reveal,mode,label:modeLabel(mode,opt),items:pool.map(prepare),i:0,answers:[],deadline:mode==="exam"?Date.now()+EXAM_SECONDS*1000:null};
   clearInterval(timerId);
   if(state.deadline) timerId=setInterval(tick,1000);
   try{history.pushState({screen:"quiz"},"")}catch(e){}
+  saveResume();
   renderQuestion();
 }
-function modeLabel(mode,opt){return {exam:"本試験モード",cat:opt,trap:"ひっかけ特訓",wrong:"間違えた問題",rand:`ランダム${opt}問`}[mode]}
+function modeLabel(mode,opt){return {exam:"本試験モード",cat:opt,trap:"ひっかけ特訓",wrong:"間違えた問題",rand:`ランダム${opt}問`,mark:"ブックマーク",weak:"苦手克服"}[mode]}
 function tick(){
   const el=document.getElementById("timer"); if(!el) return;
   const left=Math.max(0,Math.round((state.deadline-Date.now())/1000));
@@ -290,12 +316,18 @@ function renderHome(msg){
   clearInterval(timerId);
   const wrongCount=Object.keys(store.wrong).length;
   const rate=store.seen?Math.round(store.correct/store.seen*100):0;
+  const markCount=Object.keys(store.marks).length;
+  const daysLeft=Math.ceil((EXAM_DATE-Date.now())/DAY_MS);
+  const countdown=daysLeft>0?`本試験まで あと <b class="cd">${daysLeft}</b> 日`:daysLeft>-1?"今日が本試験です。落ち着いていきましょう":"";
+  const resumable=store.resume&&store.resume.i<store.resume.items.length?store.resume:null;
   const counts=CATEGORIES.map(c=>`${c} ${ALL.filter(q=>q.cat===c).length}`).join(" / ");
   app.innerHTML=`<div class="stack">
     <div><div class="eyebrow">宅地建物取引士試験 対策</div>
       <h1>宅建 <em>一発合格</em>ドリル</h1>
       <p class="lead">過去問の頻出論点とひっかけ問題を、毎回ランダムな順番・選択肢の並びで出題します。</p></div>
+    ${countdown?`<div class="countdown">${countdown}<span class="foot">（2026年10月18日 13:00〜15:00）</span></div>`:""}
     ${msg?`<div class="trapbox">${esc(msg)}</div>`:""}
+    ${resumable?`<button class="mode primary" id="resume"><b>続きから再開：${esc(resumable.label)}</b><span>${resumable.i+1}問目から（全${resumable.items.length}問）</span></button>`:""}
     <div class="toggle"><b>答え合わせ</b>
       <button data-r="end" aria-pressed="${store.reveal==="end"}">最後にまとめて採点</button>
       <button data-r="each" aria-pressed="${store.reveal==="each"}">1問ごと</button></div>
@@ -305,13 +337,21 @@ function renderHome(msg){
       <button class="mode" data-m="rand" data-o="10"><b>ランダム10問</b><span>すき間時間の腕試し</span></button>
       <button class="mode" data-m="rand" data-o="25"><b>ランダム25問</b><span>半分模試</span></button>
       <button class="mode" data-m="trap"><b>ひっかけ特訓</b><span>数字・期間・主語のすり替えだけを集中演習</span></button>
+      <button class="mode" data-m="weak"><b>苦手克服 ${WEAK_SET_SIZE}問</b><span>間違えた問題と正答率の低い分野を優先して出題</span></button>
       <button class="mode" data-m="wrong" ${wrongCount?"":"disabled"}><b>間違えた問題 ${wrongCount}問</b><span>正解するとリストから消えます</span></button>
+      <button class="mode" data-m="mark" ${markCount?"":"disabled"}><b>ブックマーク ${markCount}問</b><span>問題画面の ☆ で登録した問題</span></button>
     </div>
     <div><div class="eyebrow">分野別</div></div>
-    <div class="grid">${CATEGORIES.map(c=>`<button class="mode" data-m="cat" data-o="${c}"><b>${c}</b><span>${ALL.filter(q=>q.cat===c).length}問</span></button>`).join("")}</div>
-    <div class="stats"><span>これまでの解答 ${store.seen}問 ・ 正答率 ${rate}%</span></div>
+    <div class="grid">${CATEGORIES.map(c=>`<button class="mode" data-m="cat" data-o="${c}"><b>${c}</b><span>${ALL.filter(q=>q.cat===c).length}問 ・ ${catRate(c)===null?"未挑戦":"正答率 "+Math.round(catRate(c)*100)+"%"}</span><span class="bar"><i style="width:${Math.round((catRate(c)||0)*100)}%"></i></span></button>`).join("")}</div>
+    <div class="stats"><span>これまでの解答 ${store.seen}問 ・ 正答率 ${rate}%</span><button class="linkbtn" id="reset">学習記録をリセット</button></div>
+    <div id="resetConfirm"></div>
     <p class="foot">学習記録はこの端末のブラウザにだけ保存されます。問題は最新の法改正を踏まえた改題です。最終確認は公式テキストで行ってください。</p>
   </div>`;
+  const resumeBtn=document.getElementById("resume"); if(resumeBtn) resumeBtn.addEventListener("click",resume);
+  document.getElementById("reset").addEventListener("click",()=>{
+    document.getElementById("resetConfirm").innerHTML=`<div class="trapbox row" style="align-items:center">正答率・間違えた問題・ブックマークをすべて消します。<button class="btn" id="resetYes">消す</button><button class="btn ghost" id="resetNo">やめる</button></div>`;
+    document.getElementById("resetYes").addEventListener("click",()=>{store={...emptyStore(),reveal:store.reveal};saveStore(store);renderHome("学習記録をリセットしました。")});
+    document.getElementById("resetNo").addEventListener("click",()=>document.getElementById("resetConfirm").innerHTML="")});
   app.querySelectorAll("[data-r]").forEach(b=>b.addEventListener("click",()=>{store.reveal=b.dataset.r;saveStore(store);renderHome()}));
   app.querySelectorAll("[data-m]").forEach(b=>b.addEventListener("click",()=>{
     const o=b.dataset.o; start(b.dataset.m,b.dataset.m==="rand"?Number(o):o)}));
@@ -323,7 +363,7 @@ function renderQuestion(){
     <div class="top"><button class="btn ghost" id="back">← トップへ戻る</button><b>${esc(state.label)}</b><span>${state.i+1} / ${n} <span id="timer"></span></span></div>
     <div class="bar"><i style="width:${state.i/n*100}%"></i></div>
     <div class="panel stack">
-      <div class="row"><span class="chip">${esc(q.cat)}</span><span class="chip ${q.tag==="ひっかけ"?"trap":""}">${esc(q.tag)}</span></div>
+      <div class="row"><span class="chip">${esc(q.cat)}</span><span class="chip ${q.tag==="ひっかけ"?"trap":""}">${esc(q.tag)}</span><button class="linkbtn" id="mark" aria-pressed="${!!store.marks[q.id]}">${store.marks[q.id]?"★ ブックマーク済み":"☆ ブックマーク"}</button></div>
       <div class="q">${esc(q.q)}</div>
       <div class="choices">${q.choices.map((c,k)=>`<button class="choice" data-k="${k}"><span class="n">${k+1}</span><span>${esc(c)}</span></button>`).join("")}</div>
       <div id="after"></div>
@@ -334,6 +374,10 @@ function renderQuestion(){
   app.querySelectorAll(".choice").forEach(b=>b.addEventListener("click",()=>pick(Number(b.dataset.k))));
   document.getElementById("quit").addEventListener("click",showResult);
   document.getElementById("back").addEventListener("click",goHome);
+  document.getElementById("mark").addEventListener("click",e=>{
+    if(store.marks[q.id]) delete store.marks[q.id]; else store.marks[q.id]=1; saveStore(store);
+    e.currentTarget.textContent=store.marks[q.id]?"★ ブックマーク済み":"☆ ブックマーク";
+    e.currentTarget.setAttribute("aria-pressed",!!store.marks[q.id])});
 }
 function pick(k){
   app.querySelectorAll(".choice").forEach((b,idx)=>b.classList.toggle("picked",idx===k));
@@ -345,7 +389,8 @@ function answer(k,conf){
   const q=state.items[state.i], ok=k===q.answer;
   state.answers.push({q,picked:k,ok,conf});
   store.seen++; if(ok){store.correct++;delete store.wrong[q.id]} else store.wrong[q.id]=1;
-  saveStore(store);
+  const st=store.catStats[q.cat]||(store.catStats[q.cat]={seen:0,correct:0}); st.seen++; if(ok) st.correct++;
+  store.resume={...state,i:state.i+1}; saveStore(store);
   if(state.reveal==="end"){goNext();return}
   app.querySelectorAll(".choice").forEach((b,idx)=>{b.disabled=true;
     if(idx===q.answer) b.classList.add("ok"); else if(idx===k) b.classList.add("ng")});
@@ -362,7 +407,7 @@ function showResult(){try{history.replaceState({screen:"result"},"")}catch(e){}r
 function goHome(){if(history.state&&history.state.screen){history.back()}else renderHome()}
 window.addEventListener("popstate",()=>{window.scrollTo(0,0);renderHome()});
 function renderResult(){
-  clearInterval(timerId);
+  clearInterval(timerId); store.resume=null; saveStore(store);
   const a=state.answers, total=state.items.length, right=a.filter(x=>x.ok).length;
   const ratio=total?right/total:0, passed=ratio>=PASS_RATIO;
   const rows=CATEGORIES.map(c=>{const xs=a.filter(x=>x.q.cat===c);if(!xs.length)return"";
@@ -370,7 +415,7 @@ function renderResult(){
   const count=f=>a.filter(f).length;
   const lucky=count(x=>x.ok&&x.conf==="guess"), trapped=count(x=>!x.ok&&x.conf==="sure"), solid=count(x=>x.ok&&x.conf==="sure");
   const trapMiss=count(x=>!x.ok&&x.q.tag==="ひっかけ"), trapAll=count(x=>x.q.tag==="ひっかけ");
-  const unanswered=state.items.length-total;
+  const unanswered=total-a.length;
   const review=a.map((x,i)=>`<div class="miss stack" style="gap:6px">
     <div class="row"><b style="color:var(${x.ok?"--ok":"--ng"})">${x.ok?"○":"×"} 第${i+1}問</b><span class="chip">${esc(x.q.cat)}</span><span class="chip ${x.q.tag==="ひっかけ"?"trap":""}">${esc(x.q.tag)}</span><span class="chip">${esc((CONFIDENCE.find(c=>c.key===x.conf)||{}).label||"")}</span></div>
     <div>${esc(x.q.q)}</div>
